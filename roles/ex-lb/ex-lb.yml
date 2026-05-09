@@ -1,3 +1,0 @@
-- hosts: ex_lb
-  roles:
-  - ex-lb

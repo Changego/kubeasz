@@ -1,5 +1,0 @@
-- hosts:
-  - kube_master
-  - kube_node
-  roles:
-  - kube-router
