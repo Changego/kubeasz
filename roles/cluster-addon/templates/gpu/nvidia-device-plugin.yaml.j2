@@ -1,0 +1,73 @@
+# NVIDIA Device Plugin DaemonSet
+# 参考阿里云 nvidia-device-plugin.yml，适配 kubeasz 的 Jinja2 模板变量
+# 文档: https://github.com/NVIDIA/k8s-device-plugin
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-device-plugin-daemonset
+  namespace: kube-system
+  labels:
+    app: nvidia-device-plugin
+spec:
+  selector:
+    matchLabels:
+      name: nvidia-device-plugin-ds
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        name: nvidia-device-plugin-ds
+        app: nvidia-device-plugin
+    spec:
+      tolerations:
+        # 允许部署到带 NoSchedule 污点的 GPU 节点
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          effect: NoSchedule
+      priorityClassName: system-node-critical
+      # 仅调度到有 NVIDIA GPU 的节点
+      nodeSelector:
+        nvidia.com/gpu: "true"
+      containers:
+        - image: {{ nvidia_device_plugin_image }}
+          name: nvidia-device-plugin-ctr
+          args:
+            - "--fail-on-init-error=false"
+            - "--pass-device-specs=true"
+            - "--device-id-strategy=index"
+          env:
+            - name: DP_DISABLE_HEALTHCHECKS
+              value: "{{ nvidia_dp_disable_healthchecks }}"
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: all
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          resources:
+            limits:
+              memory: "300Mi"
+              cpu: "300m"
+            requests:
+              memory: "100Mi"
+              cpu: "100m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: device-plugin
+              mountPath: /var/lib/kubelet/device-plugins
+            - name: device-plugin-config
+              mountPath: /etc/nvidia-device-plugin
+      volumes:
+        - name: device-plugin
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
+        - name: device-plugin-config
+          hostPath:
+            path: /etc/nvidia-device-plugin
+            type: DirectoryOrCreate

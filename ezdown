@@ -23,6 +23,7 @@ EXT_BIN_VER=1.13.3
 SYS_PKG_VER=1.0.4
 HARBOR_VER=v2.12.4
 REGISTRY_MIRROR=docker.1ms.run
+UPLOAD_PREFIX=""
 
 # images downloaded by default(with 'ezdown -D')
 # https://github.com/projectcalico/calico
@@ -61,6 +62,10 @@ minioOperatorVer=7.1.1
 openebsVer=4.3.2
 # https://kubernetes.github.io/ingress-nginx/deploy/
 ingressNginxVer=4.13.0
+# https://github.com/NVIDIA/k8s-device-plugin
+nvidiaDevPluginVer=v0.18.1
+# https://github.com/Project-HAMi/HAMi
+hamiVer=v2.7.1
 
 function usage() {
   echo -e "\033[33mUsage:\033[0m ezdown [options] [args]"
@@ -70,6 +75,7 @@ function usage() {
     -P <OS>    download system packages of the OS (ubuntu_22,debian_11,...)
     -R         download Registry(harbor) offline installer
     -S         start kubeasz in a container
+    -U <url>   set custom upload registry prefix, e.g. "swr.cn-east-3.myhuaweicloud.com/uos"
     -X <opt>   download extra images
     -d <ver>   set docker-ce version, default "$DOCKER_VER"
     -e <ver>   set kubeasz-ext-bin version, default "$EXT_BIN_VER"
@@ -113,6 +119,7 @@ available options:
     cilium                   to download images of cilium
     dashboard                to download images of dashboard
     flannel                  to download images of flannel
+    hami                     to download images of HAMi vGPU scheduler
     ingress-nginx            to download images of ingress-nginx
     kube-ovn                 to download images of kube-ovn
     kube-router              to download images of kube-router
@@ -129,11 +136,14 @@ available options:
     nacos                    to download images of nacos
     network-check            to download images of network-check
     nfs-provisioner          to download images of nfs-provisioner
+    nvidia-device-plugin     to download images of nvidia-device-plugin
     openebs                  to download images of openebs
     prometheus               to download images of prometheus
     rocketmq                 to download images of rocketmq
 examples:
     ./ezdown -X prometheus
+    ./ezdown -X nvidia-device-plugin
+    ./ezdown -X hami
 EOF
 }
 
@@ -362,6 +372,20 @@ function get_extra_images() {
           "ecr-public.aws.com/docker/library/redis:8.2.2-alpine" \
         )
       down_and_save_images argocd
+      ;;
+
+    nvidia-device-plugin)
+      IMAGES=(\
+          "nvcr.io/nvidia/k8s-device-plugin:$nvidiaDevPluginVer" \
+        )
+      down_and_save_images nvidia
+      ;;
+
+    hami)
+      IMAGES=(\
+          "projecthami/hami:$hamiVer" \
+        )
+      down_and_save_images projecthami
       ;;
 
     cilium)
@@ -606,6 +630,9 @@ function down_and_save_images(){
 function down_and_save_images_orig(){
   NS="easzlab"
   [ "$#" -eq 1 ] && NS="$1"
+  local target_prefix="easzlab.io.local:5000/${NS}"
+  [[ -n "$UPLOAD_PREFIX" ]] && target_prefix="$UPLOAD_PREFIX"
+  
   for item in "${IMAGES[@]}"; do
     image_part="${item##*/}"
     image_name="${image_part%:*}"
@@ -618,9 +645,9 @@ function down_and_save_images_orig(){
     else
       docker load -i "$image_file"
     fi
-    docker tag "$item" "easzlab.io.local:5000/${NS}/${image_part}"
-    docker push "easzlab.io.local:5000/${NS}/${image_part}" || \
-    { logger error "push easzlab.io.local:5000/${NS}/${image_part} failed!"; return 1; }
+    docker tag "$item" "${target_prefix}/${image_part}"
+    docker push "${target_prefix}/${image_part}" || \
+    { logger error "push ${target_prefix}/${image_part} failed!"; return 1; }
   done
 }
 
@@ -629,6 +656,9 @@ function down_and_save_images_with_mirror(){
   [[ "$REGISTRY_MIRROR" == "" ]] && { logger error "no registry mirror set"; return 1; }
   NS="easzlab"
   [ "$#" -eq 1 ] && NS="$1"
+  local target_prefix="easzlab.io.local:5000/${NS}"
+  [[ -n "$UPLOAD_PREFIX" ]] && target_prefix="$UPLOAD_PREFIX"
+
   for item in "${IMAGES[@]}"; do
     image_part="${item##*/}"
     image_name="${image_part%:*}"
@@ -648,9 +678,9 @@ function down_and_save_images_with_mirror(){
     else
       docker load -i "$image_file"
     fi
-    docker tag "$item" "easzlab.io.local:5000/${NS}/${image_part}"
-    docker push "easzlab.io.local:5000/${NS}/${image_part}" || \
-    { logger error "push easzlab.io.local:5000/${NS}/${image_part} failed!"; return 1; }
+    docker tag "$item" "${target_prefix}/${image_part}"
+    docker push "${target_prefix}/${image_part}" || \
+    { logger error "push ${target_prefix}/${image_part} failed!"; return 1; }
   done
 }
 
@@ -792,7 +822,7 @@ function main() {
   [[ "$#" -eq 0 ]] && { usage >&2; exit 1; }
 
   ACTION=""
-  while getopts "CDP:RSX:d:e:k:m:z:" OPTION; do
+  while getopts "CDP:RSU:X:d:e:k:m:z:" OPTION; do
       case "$OPTION" in
         D)
           ACTION="download_all"
@@ -808,6 +838,9 @@ function main() {
           ;;
         S)
           ACTION="start_kubeasz_docker"
+          ;;
+        U)
+          UPLOAD_PREFIX="$OPTARG"
           ;;
         X)
           ACTION="get_extra_images $OPTARG"

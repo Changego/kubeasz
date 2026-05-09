@@ -14,6 +14,12 @@
 [kube_node]
 192.168.1.1 k8s_nodename=''
 
+# [optional] GPU worker nodes - subset of kube_node that have physical GPU/NPU cards
+# These nodes will have NVIDIA driver + nvidia-container-toolkit installed by '08.gpu-node.yml'
+# Each GPU node MUST also appear in [kube_node] above
+[gpu_node]
+#192.168.1.1 k8s_nodename=''
+
 # [optional] harbor server, a private docker registry
 # 'NEW_INSTALL': 'true' to install a harbor server; 'false' to integrate with existed one
 [harbor]

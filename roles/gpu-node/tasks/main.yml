@@ -1,0 +1,32 @@
+---
+# GPU节点角色主入口
+# 支持 NVIDIA GPU / 华为昇腾 NPU 两种路径
+
+- name: 检测节点是否存在 NVIDIA GPU（lspci）
+  shell: "lspci 2>/dev/null | grep -i nvidia || true"
+  register: nvidia_pci_check
+  changed_when: false
+
+- name: 检测节点是否存在 NPU 设备（lspci）
+  shell: "lspci 2>/dev/null | grep -iE 'huawei|ascend|npu' || true"
+  register: npu_pci_check
+  changed_when: false
+
+- name: 设置 GPU 类型事实
+  set_fact:
+    has_nvidia_gpu: "{{ nvidia_pci_check.stdout != '' }}"
+    has_npu: "{{ npu_pci_check.stdout != '' }}"
+
+- name: 打印 GPU 检测结果
+  debug:
+    msg: "节点 {{ inventory_hostname }} - NVIDIA GPU: {{ has_nvidia_gpu }}, NPU: {{ has_npu }}"
+
+# ---------- NVIDIA GPU 安装路径 ----------
+- import_tasks: nvidia.yml
+  when: "has_nvidia_gpu|bool or GPU_FORCE_INSTALL|bool"
+
+# ---------- 华为昇腾 NPU 安装路径 ----------
+# npu.yml 为 NPU 驱动安装骨架，华为 NPU 驱动需从华为官方获取并放到
+# roles/gpu-node/files/ 目录下，与 nvidia_driver_local_pkg 类似
+- import_tasks: npu.yml
+  when: "has_npu|bool"

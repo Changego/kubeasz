@@ -125,6 +125,7 @@ available steps:
     05  kube-node          to setup the worker nodes
     06  network            to setup the network plugin
     07  cluster-addon      to setup other useful plugins
+    08  gpu-node           to install GPU drivers and device-plugin on GPU nodes
     90  all                to run 01~07 all at once
     10  ex-lb              to install external loadbalance for accessing k8s from outside
     11  harbor             to install a new harbor server or to integrate with an existed one
@@ -212,6 +213,9 @@ function setup() {
           ;;
       (07|cluster-addon)
           PLAY_BOOK="07.cluster-addon.yml"
+          ;;
+      (08|gpu-node)
+          PLAY_BOOK="08.gpu-node.yml"
           ;;
       (90|all)
           PLAY_BOOK="90.setup.yml"

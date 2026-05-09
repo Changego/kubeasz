@@ -50,3 +50,15 @@
 
 - import_tasks: argocd.yml
   when: 'argocd_install == "yes" and "argocd-server" not in pod_info.stdout'
+
+# GPU / NPU Device Plugin
+# 注意: 启用 HAMi vGPU 时请勿同时启用 nvidia_device_plugin（HAMi 内置 device-plugin）
+- import_tasks: nvidia-device-plugin.yml
+  when: 'nvidia_device_plugin_install == "yes" and hami_install != "yes" and "nvidia-device-plugin" not in pod_info.stdout'
+
+- import_tasks: npu-device-plugin.yml
+  when: 'npu_device_plugin_install == "yes" and "npu-device-plugin" not in pod_info.stdout'
+
+# HAMi vGPU（GPU 虚拟化共享，与 nvidia-device-plugin 互斥）
+- import_tasks: hami.yml
+  when: 'hami_install == "yes"'

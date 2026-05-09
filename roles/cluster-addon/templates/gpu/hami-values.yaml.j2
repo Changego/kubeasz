@@ -1,0 +1,92 @@
+# HAMi Helm values 配置模板
+# 文档: https://github.com/Project-HAMi/HAMi/blob/master/charts/hami/values.yaml
+# 仅列出关键可调参数，其余使用 HAMi chart 默认值
+
+# ---- 全局镜像仓库 ----
+global:
+  # 若使用私有仓库，设置此前缀（末尾不加 /）
+  # 例: "registry.example.com/hami"
+  imageRegistry: "{{ hami_image_registry }}"
+  imagePullSecrets: []
+
+# ---- scheduler 配置 ----
+scheduler:
+  image:
+    repository: "{{ hami_scheduler_image }}"
+    tag: "{{ hami_ver }}"
+  # HAMi scheduler 以 extender 方式注入 kube-scheduler
+  # 此处配置调度策略
+  schedulerPolicy:
+    # GPU 碎片化策略: binpack（紧凑）或 spread（分散）
+    nodeSchedulerPolicy: "{{ hami_node_scheduler_policy }}"
+    # vGPU 在物理 GPU 上的分配策略
+    gpuSchedulerPolicy: "{{ hami_gpu_scheduler_policy }}"
+
+  resources:
+    limits:
+      cpu: "{{ hami_scheduler_cpu_limit }}"
+      memory: "{{ hami_scheduler_mem_limit }}"
+    requests:
+      cpu: "{{ hami_scheduler_cpu_request }}"
+      memory: "{{ hami_scheduler_mem_request }}"
+
+  tolerations:
+    - key: node-role.kubernetes.io/master
+      effect: NoSchedule
+    - key: node-role.kubernetes.io/control-plane
+      effect: NoSchedule
+
+  nodeSelector: {}
+
+# ---- device-plugin 配置 ----
+devicePlugin:
+  image:
+    repository: "{{ hami_device_plugin_image }}"
+    tag: "{{ hami_ver }}"
+
+  # 资源名称：默认 nvidia.com/gpu（兼容原生 nvidia-device-plugin 的工作负载）
+  resourceName: "nvidia.com/gpu"
+  # vGPU 显存资源名称
+  resourceMemName: "nvidia.com/gpumem"
+  # vGPU 显存比例资源名称
+  resourceMemPercentageName: "nvidia.com/gpumem-percentage"
+  # vGPU 算力比例资源名称
+  resourceCoreName: "nvidia.com/gpucores"
+
+  # 是否启用 MIG 支持（A100 等支持 MIG 的卡）
+  migStrategy: "{{ hami_mig_strategy }}"
+
+  resources:
+    limits:
+      cpu: "{{ hami_plugin_cpu_limit }}"
+      memory: "{{ hami_plugin_mem_limit }}"
+    requests:
+      cpu: "{{ hami_plugin_cpu_request }}"
+      memory: "{{ hami_plugin_mem_request }}"
+
+  # 仅在有 GPU 的节点运行
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+
+# ---- webhook 配置 ----
+# HAMi webhook 负责注入 vGPU 资源 limit 到 Pod spec
+webhook:
+  enabled: true
+  image:
+    repository: "{{ hami_webhook_image }}"
+    tag: "{{ hami_ver }}"
+
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+# ---- 监控 ----
+# 如集群已部署 Prometheus，建议启用
+monitor:
+  enabled: "{{ hami_monitor_enabled | bool }}"

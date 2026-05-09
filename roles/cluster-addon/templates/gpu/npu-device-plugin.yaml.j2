@@ -1,0 +1,59 @@
+# NPU Device Plugin DaemonSet（华为昇腾）
+# 参考阿里云 npu-device-plugin.yml，适配 kubeasz 的 Jinja2 模板变量
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: npu-device-plugin-daemonset
+  namespace: kube-system
+  labels:
+    app: npu-device-plugin
+spec:
+  selector:
+    matchLabels:
+      name: npu-device-plugin-ds
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        name: npu-device-plugin-ds
+        app: npu-device-plugin
+    spec:
+      tolerations:
+        - key: huawei.com/npu
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          effect: NoSchedule
+      priorityClassName: system-node-critical
+      nodeSelector:
+        huawei.com/npu: "true"
+      containers:
+        - image: {{ npu_device_plugin_image }}
+          name: npu-device-plugin-ctr
+          resources:
+            limits:
+              memory: "300Mi"
+              cpu: "500m"
+            requests:
+              memory: "300Mi"
+              cpu: "500m"
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: device-plugin
+              mountPath: /var/lib/kubelet/device-plugins
+            - name: dev
+              mountPath: /dev
+            - name: npusmi
+              mountPath: /usr/bin/npusmi
+      volumes:
+        - name: device-plugin
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
+        - name: dev
+          hostPath:
+            path: /dev
+        - name: npusmi
+          hostPath:
+            path: /usr/bin/npusmi

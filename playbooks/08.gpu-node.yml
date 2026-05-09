@@ -1,0 +1,16 @@
+# 为 GPU 节点安装 NVIDIA 驱动及 nvidia-container-toolkit
+# 在部署完集群（01-07）之后，针对 GPU 节点单独运行此 playbook
+#
+# 用法示例:
+#   ezctl setup <cluster> gpu-node
+# 或手动：
+#   ansible-playbook -i clusters/<cluster>/hosts -e @clusters/<cluster>/config.yml playbooks/08.gpu-node.yml
+#
+# 前置条件：
+#   1. 已完成 05.kube-node.yml（GPU 节点已加入集群）
+#   2. GPU 物理节点已挂载显卡，lspci 可检测到
+#   3. 已在 config.yml 中配置 nvidia_driver_url 或准备好离线包
+
+- hosts: gpu_node
+  roles:
+    - gpu-node

@@ -1,0 +1,23 @@
+---
+# 部署 NPU Device Plugin（华为昇腾 NPU）
+# 使 kubelet 能识别 huawei.com/Ascend910 等 NPU 资源
+
+- block:
+    - name: 准备 npu-device-plugin 部署目录
+      file: name={{ cluster_dir }}/yml/gpu state=directory
+
+    - name: 生成 npu-device-plugin 部署文件
+      template:
+        src: gpu/npu-device-plugin.yaml.j2
+        dest: "{{ cluster_dir }}/yml/gpu/npu-device-plugin.yaml"
+
+    - name: 部署 npu-device-plugin
+      shell: "{{ base_dir }}/bin/kubectl apply -f {{ cluster_dir }}/yml/gpu/npu-device-plugin.yaml"
+
+    - name: 等待 npu-device-plugin DaemonSet 就绪
+      shell: >
+        {{ base_dir }}/bin/kubectl -n kube-system rollout status
+        daemonset/npu-device-plugin-daemonset --timeout=120s
+      ignore_errors: true
+
+  when: 'npu_device_plugin_install == "yes"'

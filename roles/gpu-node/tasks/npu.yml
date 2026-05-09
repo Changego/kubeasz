@@ -1,0 +1,111 @@
+---
+# 华为昇腾 NPU 节点安装任务
+# 注意：华为 NPU 驱动需从华为官方渠道获取，无法自动下载
+# 参考: https://www.hiascend.com/document
+
+# ---- 1. 检查 NPU 驱动是否已安装 ----
+- name: 检查昇腾 NPU 驱动是否已安装（npu-smi）
+  shell: "which npu-smi && npu-smi info || true"
+  register: npusmi_check
+  changed_when: false
+
+- name: 打印 NPU 驱动状态
+  debug:
+    msg: "{{ npusmi_check.stdout_lines }}"
+
+# ---- 2. 安装昇腾驱动（本地包方式）----
+# 使用前需将驱动包放到 roles/gpu-node/files/ 目录下
+# 驱动包命名格式: Ascend-hdk-*.run 或 Ascend-NPU-Driver-*.sh
+- name: 拷贝昇腾 NPU 驱动安装包到节点
+  copy:
+    src: "{{ npu_driver_local_pkg }}"
+    dest: "/tmp/{{ npu_driver_local_pkg | basename }}"
+    mode: "0755"
+  when:
+    - "npusmi_check.stdout == ''"
+    - "npu_driver_local_pkg != ''"
+
+- name: 安装昇腾 NPU 驱动
+  shell: |
+    chmod +x /tmp/{{ npu_driver_local_pkg | basename }}
+    /tmp/{{ npu_driver_local_pkg | basename }} --full
+  when:
+    - "npusmi_check.stdout == ''"
+    - "npu_driver_local_pkg != ''"
+  ignore_errors: true
+
+# ---- 3. 安装昇腾 NPU Firmware ----
+- name: 拷贝昇腾 NPU Firmware 安装包
+  copy:
+    src: "{{ npu_firmware_local_pkg }}"
+    dest: "/tmp/{{ npu_firmware_local_pkg | basename }}"
+    mode: "0755"
+  when:
+    - "npu_firmware_local_pkg != ''"
+    - "npusmi_check.stdout == ''"
+
+- name: 安装昇腾 NPU Firmware
+  shell: |
+    chmod +x /tmp/{{ npu_firmware_local_pkg | basename }}
+    /tmp/{{ npu_firmware_local_pkg | basename }} --full
+  when:
+    - "npu_firmware_local_pkg != ''"
+    - "npusmi_check.stdout == ''"
+  ignore_errors: true
+
+# ---- 4. 安装 MindX DL（用于 NPU 容器化支持）----
+# MindX DL 提供类似 nvidia-container-toolkit 的 NPU 容器运行时支持
+- name: 检查 mindxdl-device-plugin 是否已安装
+  shell: "systemctl is-active ascend-docker-runtime || true"
+  register: mindxdl_check
+  changed_when: false
+
+- name: 拷贝 ascend-docker-runtime 安装包
+  copy:
+    src: "{{ npu_docker_runtime_pkg }}"
+    dest: "/tmp/{{ npu_docker_runtime_pkg | basename }}"
+    mode: "0755"
+  when:
+    - "mindxdl_check.stdout != 'active'"
+    - "npu_docker_runtime_pkg != ''"
+
+- name: 安装 ascend-docker-runtime
+  shell: |
+    chmod +x /tmp/{{ npu_docker_runtime_pkg | basename }}
+    /tmp/{{ npu_docker_runtime_pkg | basename }} --install
+  when:
+    - "mindxdl_check.stdout != 'active'"
+    - "npu_docker_runtime_pkg != ''"
+  ignore_errors: true
+
+- name: 启用并启动 ascend-docker-runtime 服务
+  systemd:
+    name: ascend-docker-runtime
+    enabled: true
+    state: started
+    daemon_reload: true
+  ignore_errors: true
+
+# ---- 5. 配置 containerd 集成昇腾 runtime ----
+- name: 检查 containerd config 中是否已配置昇腾 runtime
+  shell: "grep -q 'ascend' {{ CONTAINERD_CONFIG_DIR }}/config.toml || echo 'not_found'"
+  register: ascend_runtime_check
+  changed_when: false
+
+- name: 提示：昇腾 runtime 需手动集成到 containerd（暂不自动配置）
+  debug:
+    msg: >
+      检测到昇腾 NPU 但 containerd 尚未配置昇腾 runtime。
+      请参考华为官方文档手动配置，或在 containerd config.toml 中添加 ascend runtime。
+      参考: https://www.hiascend.com/document
+  when: "ascend_runtime_check.stdout == 'not_found'"
+
+# ---- 6. 为 NPU 节点打标签 ----
+- name: 为昇腾 NPU 节点打 Kubernetes 标签
+  shell: |
+    {{ base_dir }}/bin/kubectl label node {{ K8S_NODENAME }} \
+      huawei.com/npu=true \
+      accelerator=huawei-npu \
+      --overwrite
+  delegate_to: "{{ groups['kube_master'][0] }}"
+  ignore_errors: true

@@ -263,3 +263,100 @@ HARBOR_SELF_SIGNED_CERT: true
 
 # install extra component
 HARBOR_WITH_TRIVY: false
+
+
+############################
+# role:gpu-node
+############################
+# NVIDIA 驱动版本（仅作标识，实际安装以 URL 或本地包为准）
+nvidia_driver_version: "550.54.15"
+
+# NVIDIA 驱动下载 URL（为空则使用本地包）
+# 示例: https://example.com/NVIDIA-Linux-x86_64-550.54.15.run
+nvidia_driver_url: ""
+
+# NVIDIA 驱动本地 .run 文件名（需放到 roles/gpu-node/files/）
+# 当 nvidia_driver_url 为空时生效
+nvidia_driver_local_pkg: ""
+
+# nvidia-container-toolkit 安装源: online | offline
+# offline 模式需将 rpm/deb 包放到 roles/gpu-node/files/nvidia-container-toolkit/
+nvidia_toolkit_install_source: "online"
+
+# 是否为 GPU 节点自动打 Kubernetes 标签（nvidia.com/gpu=true）
+nvidia_label_node: true
+
+# 强制安装（即使未检测到 NVIDIA 设备，慎用）
+GPU_FORCE_INSTALL: false
+
+############################
+# role:cluster-addon（GPU device plugin 部分）
+############################
+# NVIDIA Device Plugin 自动安装（需先完成 gpu-node 安装）
+nvidia_device_plugin_install: "no"
+# nvidia-device-plugin 镜像
+# 社区镜像: nvcr.io/nvidia/k8s-device-plugin:v0.17.0
+nvidia_device_plugin_image: "nvcr.io/nvidia/k8s-device-plugin:v0.17.0"
+# 禁用健康检查（排错时可置为 all，生产建议为空）
+nvidia_dp_disable_healthchecks: ""
+
+# NPU Device Plugin 自动安装（华为昇腾 NPU）
+npu_device_plugin_install: "no"
+# npu-device-plugin 镜像（需提前推送到私有仓库或可访问公网）
+npu_device_plugin_image: "swr.cn-south-1.myhuaweicloud.com/ascend-deviceplugin/ascend-k8sdeviceplugin:v5.0.RC3"
+
+
+############################
+# HAMi vGPU（GPU 虚拟化共享）
+# 项目地址: https://github.com/Project-HAMi/HAMi
+# ⚠️  HAMi 内置 device-plugin，启用后请将 nvidia_device_plugin_install 置为 "no"
+# ⚠️  HAMi 以 kube-scheduler extender 方式工作，需保证 kube-scheduler 可正常启动
+############################
+
+# 是否启用 HAMi vGPU（yes|no）
+hami_install: "no"
+
+# HAMi 版本（Helm chart 版本，与镜像 tag 对齐）
+hami_ver: "v2.4.1"
+
+# HAMi 组件部署命名空间
+hami_namespace: "kube-system"
+
+# HAMi Helm chart 安装源: online | offline
+# offline 模式需将 hami-<hami_ver>.tgz 放到 roles/cluster-addon/files/
+hami_install_source: "online"
+
+# 全局镜像仓库前缀（末尾不加 /），留空使用原始仓库
+# 离线环境示例: "registry.example.com/hami"
+hami_image_registry: ""
+
+# HAMi 各组件镜像（相对于 hami_image_registry）
+hami_scheduler_image: "projecthami/hami"
+hami_device_plugin_image: "projecthami/hami"
+hami_webhook_image: "projecthami/hami"
+
+# ---- 调度策略 ----
+# 节点级 GPU 调度策略: binpack（紧凑装箱） | spread（分散调度）
+hami_node_scheduler_policy: "binpack"
+
+# GPU 内算力调度策略: binpack | spread
+hami_gpu_scheduler_policy: "spread"
+
+# ---- MIG 支持（适用 A100/H100 等支持 MIG 的卡）----
+# 可选值: none | single | mixed
+hami_mig_strategy: "none"
+
+# ---- 监控（需集群已部署 Prometheus）----
+hami_monitor_enabled: false
+
+# ---- HAMi scheduler 资源配额 ----
+hami_scheduler_cpu_limit: "1"
+hami_scheduler_mem_limit: "1Gi"
+hami_scheduler_cpu_request: "100m"
+hami_scheduler_mem_request: "256Mi"
+
+# ---- HAMi device-plugin 资源配额 ----
+hami_plugin_cpu_limit: "1"
+hami_plugin_mem_limit: "512Mi"
+hami_plugin_cpu_request: "100m"
+hami_plugin_mem_request: "128Mi"

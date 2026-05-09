@@ -1,0 +1,9 @@
+---
+# gpu-node role README
+# 此文件用于记录 GPU 节点安装注意事项，以及 files/ 目录应放置的文件
+#
+# files/
+#   nvidia-container-toolkit/     <- 离线包目录（offline 模式）
+#     *.rpm 或 *.deb
+#
+# 驱动 .run 文件直接放到 files/ 根目录（可选，online 模式无需准备）

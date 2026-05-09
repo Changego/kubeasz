@@ -1,0 +1,37 @@
+---
+# gpu-node role 默认变量
+
+# ---- NVIDIA GPU ----
+# GPU 驱动版本（留空则使用本地包或在线安装）
+nvidia_driver_version: "550.54.15"
+
+# NVIDIA 驱动下载 URL（优先级高于本地包）
+# 留空则使用 nvidia_driver_local_pkg 指定的本地文件
+nvidia_driver_url: ""
+
+# 本地驱动安装包路径（nvidia_driver_url 为空时生效）
+# 需将 .run 文件放到 {{ base_dir }}/roles/gpu-node/files/ 下
+nvidia_driver_local_pkg: ""
+
+# nvidia-container-toolkit 安装源: online | offline
+# offline 模式需将 rpm/deb 包放到 {{ base_dir }}/roles/gpu-node/files/nvidia-container-toolkit/
+nvidia_toolkit_install_source: "online"
+
+# 是否自动为 GPU 节点打 kubernetes 标签
+nvidia_label_node: true
+
+# 是否强制安装（即使 lspci 未检测到 NVIDIA 设备）
+GPU_FORCE_INSTALL: false
+
+# ---- 华为昇腾 NPU ----
+# NPU 驱动本地包路径（需从华为官方下载后放到 roles/gpu-node/files/）
+# 格式: Ascend-hdk-910-npu-driver_*.run
+npu_driver_local_pkg: ""
+
+# NPU Firmware 本地包路径
+# 格式: Ascend-hdk-910-npu-firmware_*.run
+npu_firmware_local_pkg: ""
+
+# ascend-docker-runtime 安装包路径（用于 NPU 容器化支持）
+# 格式: Ascend-mindxdl-ascend-docker-runtime_*.run
+npu_docker_runtime_pkg: ""
