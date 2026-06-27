@@ -1,0 +1,378 @@
+#!/bin/bash
+#--------------------------------------------------
+# Switch kubeasz image registry from local easzlab to remote (e.g. Huawei SWR).
+# Aligned with: ./ezdown -D -U <prefix>
+#
+# ezdown -U pushes:  <prefix>/<image>:<tag>
+#   e.g. swr.xxx.com/uos/cni:v3.28.4  (NOT uos/cilium/cilium)
+#
+# @usage:
+#   ./ezregistry apply [registry_prefix]
+#   ./ezregistry scan
+#   ./ezregistry verify
+#   ./ezregistry reset
+#--------------------------------------------------
+# shellcheck disable=SC2155
+set -o nounset
+set -o pipefail
+
+BASE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OLD_IMAGE_PREFIX="easzlab.io.local:5000/easzlab"
+OLD_REGISTRY="easzlab.io.local:5000"
+DEFAULT_NEW_PREFIX="swr.cn-east-3.myhuaweicloud.com/uos"
+BACKUP_DIR="${BASE}/.registry-backup"
+STATE_FILE="${BACKUP_DIR}/state.env"
+
+START_AIO_IMAGES=(
+  "cni" "node" "kube-controllers" "coredns"
+  "k8s-dns-node-cache" "metrics-server" "pause"
+)
+
+# helm chart repository namespaces to flatten: registry/repo -> prefix/repo
+HELM_REPO_NAMESPACES=(
+  easzlab prometheus kubernetesui argocd minio rocketmq apecloud cilium flannel cloudnativelabs rancher
+)
+
+function usage() {
+  echo -e "\033[33mUsage:\033[0m ezregistry COMMAND [registry_prefix]"
+  cat <<EOF
+Commands:
+  apply [prefix]   replace ALL image registry paths (default: ${DEFAULT_NEW_PREFIX})
+  scan             show remaining old registry references
+  verify           fail if old registry still found (except excluded files)
+  reset            restore from backup
+  show             summary
+
+Replace rules (match ezdown -U push layout):
+  ${OLD_IMAGE_PREFIX}/<img>           -> <prefix>/<img>
+    (covers calico-v3.{24,26,28}.yaml.j2, coredns, metrics-server, node-local-dns, ...)
+  ${OLD_REGISTRY}/<ns>/<img>          -> <prefix>/<img>
+  ${OLD_REGISTRY}/kubeovn             -> <prefix>
+  registry: ${OLD_REGISTRY}           -> registry: <prefix>
+  image/repository: easzlab/<img>      -> <img>  (helm split fields)
+
+Excluded (DO NOT change — local registry client config):
+  roles/containerd/templates/easzlab.io.local:5000/*
+  roles/containerd/tasks/main.yml
+EOF
+}
+
+function logger() {
+  local level="$1" msg="$2" ts
+  ts="$(date +'%Y-%m-%d %H:%M:%S')"
+  case "$level" in
+    info)  echo -e "\033[36m${ts}\033[0m \033[32mINFO\033[0m  ${msg}" ;;
+    warn)  echo -e "\033[36m${ts}\033[0m \033[33mWARN\033[0m  ${msg}" ;;
+    error) echo -e "\033[36m${ts}\033[0m \033[31mERROR\033[0m ${msg}" ;;
+  esac
+}
+
+function normalize_prefix() {
+  local p="${1:-}"
+  p="${p%/}"
+  p="${p#http://}"
+  p="${p#https://}"
+  echo "$p"
+}
+
+function registry_host_from_prefix() {
+  echo "${1%%/*}"
+}
+
+function should_skip_file() {
+  local file="$1"
+  case "$file" in
+    *"/containerd/templates/easzlab.io.local:5000/"*) return 0 ;;
+    *"/containerd/tasks/main.yml") return 0 ;;
+  esac
+  return 1
+}
+
+function list_target_files() {
+  find "${BASE}/roles" "${BASE}/example" -type f \( -name '*.j2' -o -name '*.yml' -o -name '*.yaml' -o -name '*.sh' \) 2>/dev/null
+  find "${BASE}/clusters" -type f \( -name 'config.yml' -o -name '*.yml' -o -name '*.yaml' \) 2>/dev/null
+}
+
+function list_scannable_paths() {
+  echo "${BASE}/roles" "${BASE}/example" "${BASE}/clusters"
+}
+
+function grep_old_registry() {
+  grep -rn "${OLD_REGISTRY}" $(list_scannable_paths) 2>/dev/null \
+    | grep -vF "${OLD_IMAGE_PREFIX}" \
+    | while IFS= read -r line; do
+        local f="${line%%:*}"
+        should_skip_file "$f" && continue
+        echo "$line"
+      done
+}
+
+function file_needs_registry_patch() {
+  local file="$1"
+  grep -qF "${OLD_IMAGE_PREFIX}" "$file" 2>/dev/null && return 0
+  grep -qF "${OLD_REGISTRY}" "$file" 2>/dev/null && return 0
+  return 1
+}
+
+function backup_all_targets() {
+  rm -rf "${BACKUP_DIR}"
+  mkdir -p "${BACKUP_DIR}"
+  local file rel dest
+  while IFS= read -r file; do
+    [[ -f "$file" ]] || continue
+    rel="${file#${BASE}/}"
+    dest="${BACKUP_DIR}/${rel}"
+    mkdir -p "$(dirname "$dest")"
+    cp -f "$file" "$dest"
+  done < <(list_target_files)
+  logger info "backup saved to ${BACKUP_DIR}"
+}
+
+function write_state() {
+  local new_prefix="$1"
+  cat > "${STATE_FILE}" <<EOF
+OLD_IMAGE_PREFIX="${OLD_IMAGE_PREFIX}"
+NEW_PREFIX="${new_prefix}"
+REGISTRY_HOST="$(registry_host_from_prefix "$new_prefix")"
+APPLIED_AT="$(date -Iseconds)"
+EOF
+}
+
+function read_state_new_prefix() {
+  [[ -f "${STATE_FILE}" ]] || return 1
+  # shellcheck source=/dev/null
+  source "${STATE_FILE}"
+  echo "${NEW_PREFIX}"
+}
+
+function replace_in_file() {
+  local file="$1" from="$2" to="$3"
+  [[ -f "$file" ]] || return 0
+  grep -qF "${from}" "$file" || return 0
+  local escaped_from escaped_to
+  escaped_from="$(printf '%s' "$from" | sed 's/[\\/&|]/\\&/g')"
+  escaped_to="$(printf '%s' "$to" | sed 's/[\\/&|]/\\&/g')"
+  sed -i "s|${escaped_from}|${escaped_to}|g" "$file"
+}
+
+function flatten_helm_repositories() {
+  local file="$1" ns
+  for ns in "${HELM_REPO_NAMESPACES[@]}"; do
+    sed -i \
+      -e "s|repository: ${ns}/|repository: |g" \
+      -e "s|repository: '${ns}/|repository: '|g" \
+      -e "s|image: ${ns}/|image: |g" \
+      "$file"
+  done
+}
+
+function replace_other_registry_in_file() {
+  local file="$1" new_prefix="$2"
+  should_skip_file "$file" && return 0
+  grep -qF "${OLD_REGISTRY}" "$file" || return 0
+
+  local esc_old esc_new
+  esc_old="$(printf '%s' "${OLD_REGISTRY}" | sed 's/[.[\*^$()+?{|]/\\&/g')"
+  esc_new="$(printf '%s' "${new_prefix}" | sed 's/[\\/&|]/\\&/g')"
+
+  # kube-ovn install script: REGISTRY="easzlab.io.local:5000/kubeovn" -> "<prefix>"
+  sed -i "s|${OLD_REGISTRY}/kubeovn|${new_prefix}|g" "$file"
+
+  # easzlab.io.local:5000/<namespace>/<image> -> <prefix>/<image>
+  perl -pi -e 's|\Q'"${OLD_REGISTRY}"'\E/[^/\s\"'"'"']+/([^/\s\"'"'"'`:]+)|'"${new_prefix}"'/$1|g' "$file"
+
+  # helm / values split fields: registry + repository
+  sed -i \
+    -e "s|registry: ${esc_old}/|registry: ${esc_new}/|g" \
+    -e "s|registry: ${esc_old}|registry: ${esc_new}|g" \
+    -e "s|registry: \"${esc_old}/|registry: \"${esc_new}/|g" \
+    -e "s|registry: \"${esc_old}\"|registry: \"${esc_new}\"|g" \
+    -e "s|imageRegistry: \"${esc_old}\"|imageRegistry: \"${esc_new}\"|g" \
+    -e "s|defaultRegistry: ${esc_old}|defaultRegistry: ${esc_new}|g" \
+    -e "s|image\.registry=${esc_old}|image.registry=${esc_new}|g" \
+    -e "s|repository='${esc_old}/|repository='${esc_new}/|g" \
+    -e "s|REGISTRY=\"${esc_old}|REGISTRY=\"${new_prefix}|g" \
+    "$file"
+
+  flatten_helm_repositories "$file"
+
+  # full-path repository lines left as <prefix>/<img> after perl; fix doubled prefix if any
+  sed -i "s|${esc_new}/${esc_new}/|${esc_new}/|g" "$file"
+}
+
+function update_config_registry_trust() {
+  local file="$1" registry_host="$2" new_prefix="$3"
+  [[ -f "$file" ]] || return 0
+  [[ "$file" == *config.yml ]] || return 0
+  local swr_entry="https://${registry_host}"
+  if grep -q 'INSECURE_REG:' "$file"; then
+    if grep -qF "${OLD_REGISTRY}" "$file"; then
+      sed -i "s|\"http://${OLD_REGISTRY}\"|\"${swr_entry}\"|g" "$file"
+      sed -i "s|\"https://${OLD_REGISTRY}\"|\"${swr_entry}\"|g" "$file"
+    elif ! grep -qF "${swr_entry}" "$file"; then
+      sed -i "/INSECURE_REG:/a\\  - \"${swr_entry}\"" "$file"
+    fi
+  fi
+  if grep -q '^SANDBOX_IMAGE:' "$file" && grep -qF "${OLD_IMAGE_PREFIX}" "$file"; then
+    sed -i "s|${OLD_IMAGE_PREFIX}|${new_prefix}|g" "$file"
+  fi
+}
+
+function cmd_scan() {
+  echo "========== [1] start-aio 核心 (${OLD_IMAGE_PREFIX}) =========="
+  local img found=0
+  for img in "${START_AIO_IMAGES[@]}"; do
+    local hits
+    hits="$(grep -rnF "${OLD_IMAGE_PREFIX}/${img}" $(list_scannable_paths) 2>/dev/null || true)"
+    if [[ -n "$hits" ]]; then
+      found=1
+      echo "--- ${img} ---"
+      echo "$hits"
+    fi
+  done
+  [[ "$found" -eq 0 ]] && echo "  OK"
+
+  echo ""
+  echo "========== [1b] calico 模板 roles/calico/templates/calico-v3.*.yaml.j2 =========="
+  local calico_hits
+  calico_hits="$(grep -rnF "${OLD_IMAGE_PREFIX}" "${BASE}/roles/calico/templates" 2>/dev/null || true)"
+  if [[ -n "$calico_hits" ]]; then
+    echo "$calico_hits"
+  else
+    echo "  OK (v3.24/v3.26/v3.28 均已替换或无需替换)"
+  fi
+
+  echo ""
+  echo "========== [2] ${OLD_IMAGE_PREFIX} 残留 =========="
+  grep -rnF "${OLD_IMAGE_PREFIX}" $(list_scannable_paths) 2>/dev/null || echo "  (无)"
+
+  echo ""
+  echo "========== [3] 其它 ${OLD_REGISTRY} 残留（应替换的）=========="
+  local other
+  other="$(grep_old_registry)"
+  if [[ -n "$other" ]]; then
+    echo "$other"
+  else
+    echo "  (无)"
+  fi
+
+  echo ""
+  echo "========== [4] 排除项（正常保留，勿改）=========="
+  echo "  roles/containerd/templates/easzlab.io.local:5000/hosts.toml.j2"
+  echo "  roles/containerd/tasks/main.yml (certs.d 目录名)"
+  grep -rn "${OLD_REGISTRY}" "${BASE}/roles/containerd" 2>/dev/null | sed 's/^/  /' || true
+
+  echo ""
+  echo "========== [5] clusters/*/yml 已生成清单 =========="
+  local yml_found=0
+  while IFS= read -r f; do
+    if grep -qE "${OLD_REGISTRY}" "$f" 2>/dev/null; then
+      yml_found=1
+      echo "  ${f#${BASE}/}"
+      grep -nE "${OLD_REGISTRY}" "$f" | sed 's/^/    /'
+    fi
+  done < <(find "${BASE}/clusters" -path '*/yml/*' -type f 2>/dev/null)
+  [[ "$yml_found" -eq 0 ]] && echo "  (无)"
+}
+
+function cmd_show() {
+  echo "${OLD_IMAGE_PREFIX}: $(grep -rlF "${OLD_IMAGE_PREFIX}" $(list_scannable_paths) 2>/dev/null | wc -l | tr -d ' ') files"
+  echo "${OLD_REGISTRY} (excl. containerd local): $(grep_old_registry | wc -l | tr -d ' ') lines"
+  [[ -f "${STATE_FILE}" ]] && cat "${STATE_FILE}"
+}
+
+function cmd_apply() {
+  local new_prefix
+  new_prefix="$(normalize_prefix "${1:-${DEFAULT_NEW_PREFIX}}")"
+  [[ -n "$new_prefix" ]] || { logger error "registry prefix is empty"; return 1; }
+
+  if ! command -v perl >/dev/null 2>&1; then
+    logger error "perl is required; run: yum install -y perl"
+    return 1
+  fi
+
+  local registry_host
+  registry_host="$(registry_host_from_prefix "$new_prefix")"
+
+  backup_all_targets
+  write_state "${new_prefix}"
+
+  local file n=0
+  while IFS= read -r file; do
+    [[ -f "$file" ]] || continue
+    should_skip_file "$file" && continue
+    file_needs_registry_patch "$file" || continue
+
+    replace_in_file "$file" "${OLD_IMAGE_PREFIX}" "${new_prefix}"
+    replace_other_registry_in_file "$file" "${new_prefix}"
+    logger info "patched: ${file#${BASE}/}"
+    n=$((n + 1))
+  done < <(list_target_files)
+
+  while IFS= read -r file; do
+    [[ -f "$file" ]] || continue
+    update_config_registry_trust "$file" "${registry_host}" "${new_prefix}"
+  done < <(list_target_files)
+
+  logger info "patched ${n} file(s); target prefix: ${new_prefix}"
+  logger info "INSECURE_REG -> https://${registry_host}"
+
+  if ! cmd_verify; then
+    logger warn "run './ezregistry scan' for remaining items"
+    return 1
+  fi
+}
+
+function cmd_reset() {
+  [[ -d "${BACKUP_DIR}" ]] || { logger error "no backup"; return 1; }
+  local file rel
+  while IFS= read -r file; do
+    rel="${file#${BASE}/}"
+    [[ -f "${BACKUP_DIR}/${rel}" ]] && cp -f "${BACKUP_DIR}/${rel}" "$file"
+  done < <(list_target_files)
+  rm -f "${STATE_FILE}"
+  logger info "restored from ${BACKUP_DIR}"
+}
+
+function cmd_verify() {
+  local ok=0
+
+  local hits
+  hits="$(grep -rlF "${OLD_IMAGE_PREFIX}" $(list_scannable_paths) 2>/dev/null || true)"
+  if [[ -n "$hits" ]]; then
+    logger error "still has ${OLD_IMAGE_PREFIX}"
+    ok=1
+  fi
+
+  local other
+  other="$(grep_old_registry)"
+  if [[ -n "$other" ]]; then
+    logger error "still has ${OLD_REGISTRY} (non-excluded):"
+    echo "$other" | head -20
+    ok=1
+  fi
+
+  if [[ "$ok" -ne 0 ]]; then
+    return 1
+  fi
+  logger info "verify passed"
+}
+
+function main() {
+  [[ $# -ge 1 ]] || { usage; exit 1; }
+  case "$1" in
+    apply)  shift; cmd_apply "${1:-}" ;;
+    reset)  cmd_reset ;;
+    show)   cmd_show ;;
+    scan)   cmd_scan ;;
+    verify) cmd_verify ;;
+    help|-h|--help) usage ;;
+    *)
+      logger error "unknown command: $1"
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
