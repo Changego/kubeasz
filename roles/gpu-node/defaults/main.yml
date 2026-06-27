@@ -20,6 +20,10 @@ nvidia_toolkit_install_source: "online"
 # 是否自动为 GPU 节点打 kubernetes 标签
 nvidia_label_node: true
 
+# GPU 节点标签键值对 (用于 HAMi 或 device plugin 节点选择)
+nvidia_gpu_node_label_key: "gpu"
+nvidia_gpu_node_label_value: '"on"'
+
 # 是否强制安装（即使 lspci 未检测到 NVIDIA 设备）
 GPU_FORCE_INSTALL: false
 
@@ -35,3 +39,10 @@ npu_firmware_local_pkg: ""
 # ascend-docker-runtime 安装包路径（用于 NPU 容器化支持）
 # 格式: Ascend-mindxdl-ascend-docker-runtime_*.run
 npu_docker_runtime_pkg: ""
+
+# 是否自动为 NPU 节点打 Kubernetes 标签
+npu_label_node: true
+
+# NPU 节点标签键值对（用于 NPU device plugin 节点选择）
+npu_node_label_key: "npu"
+npu_node_label_value: '"on"'

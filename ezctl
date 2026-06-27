@@ -27,6 +27,7 @@ Cluster ops:
     add-etcd    <cluster>  <ip>      to add a etcd-node to the etcd cluster
     add-master  <cluster>  <ip>      to add a master node to the k8s cluster
     add-node    <cluster>  <ip>      to add a work node to the k8s cluster
+    add-gpu-node <cluster> <ip>      to install GPU driver/toolkit on an existing node
     del-etcd    <cluster>  <ip>      to delete a etcd-node from the etcd cluster
     del-master  <cluster>  <ip>      to delete a master node from the k8s cluster
     del-node    <cluster>  <ip>      to delete a work node from the k8s cluster
@@ -343,6 +344,34 @@ function add-node() {
     ansible-playbook -i "$BASE/clusters/$1/hosts" "$BASE/playbooks/22.addnode.yml" -e "NODE_TO_ADD=$2" -e "@clusters/$1/config.yml"
 }
 
+function add-gpu-node() {
+    # 为集群中已有的 work node 安装 GPU 驱动和 nvidia-container-toolkit
+    # 该节点必须已经在 [kube_node] 中
+    [[ $2 =~ ^(2(5[0-5]{1}|[0-4][0-9]{1})|[0-1]?[0-9]{1,2})(\.(2(5[0-5]{1}|[0-4][0-9]{1})|[0-1]?[0-9]{1,2})){3}$ ]] || { logger error "Invalid ip add:$2"; return 1; }
+
+    # 检查该节点是否已在集群中
+    sed -n '/^\[kube_master/,/^\[harbor/p' "$BASE/clusters/$1/hosts"|grep -E "^$2$|^$2 " || {
+        logger error "node $2 not found in kube_node/kube_master group of $BASE/clusters/$1/hosts"
+        logger error "please run 'ezctl add-node $1 $2' first to join the node into cluster"
+        return 2
+    }
+
+    # 检查是否已在 [gpu_node] 中，避免重复添加
+    if sed -n '/^\[gpu_node/,/^\[/p' "$BASE/clusters/$1/hosts"|grep -E "^$2$|^$2 " 2>/dev/null; then
+        logger warn "node $2 already in [gpu_node] group, re-running gpu-node role"
+    else
+        logger info "add $2 into 'gpu_node' group"
+        NODE_INFO="${@:2}"
+        sed -i "/\[gpu_node/a $NODE_INFO" "$BASE/clusters/$1/hosts"
+    fi
+
+    logger info "start to install GPU driver/toolkit on node:$2 in cluster:$1"
+    ansible-playbook -i "$BASE/clusters/$1/hosts" \
+        -e "@$BASE/clusters/$1/config.yml" \
+        -l "$2" \
+        "$BASE/playbooks/08.gpu-node.yml"
+}
+
 function add-master() {
     # check new master's address regexp
     [[ $2 =~ ^(2(5[0-5]{1}|[0-4][0-9]{1})|[0-1]?[0-9]{1,2})(\.(2(5[0-5]{1}|[0-4][0-9]{1})|[0-1]?[0-9]{1,2})){3}$ ]] || { logger error  "Invalid ip add:$2"; return 1; }
@@ -604,6 +633,10 @@ function main() {
       (add-node)
           [ "$#" -gt 2 ] || { usage >&2; exit 2; }
           add-node "${@:2}"
+          ;;
+      (add-gpu-node)
+          [ "$#" -gt 2 ] || { usage >&2; exit 2; }
+          add-gpu-node "${@:2}"
           ;;
       (del-etcd)
           [ "$#" -eq 3 ] || { usage >&2; exit 2; }

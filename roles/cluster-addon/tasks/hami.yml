@@ -13,6 +13,18 @@
         src: gpu/hami-values.yaml.j2
         dest: "{{ cluster_dir }}/yml/gpu/hami-values.yaml"
 
+    - name: 检查 Helm 二进制是否存在
+      stat:
+        path: "{{ bin_dir }}/helm"
+      register: helm_bin_check
+
+    - name: 报错：未找到 helm 二进制
+      fail:
+        msg: >
+          未找到 {{ bin_dir }}/helm，请确认 kubeasz ext-bin 包含 helm，
+          或通过 'ezdown -D' 重新下载，或手动将 helm 放到 {{ bin_dir }}。
+      when: "not helm_bin_check.stat.exists"
+
     - name: 检查 HAMi Helm chart 本地包是否存在
       stat:
         path: "{{ base_dir }}/roles/cluster-addon/files/hami-{{ hami_ver }}.tgz"
@@ -20,8 +32,8 @@
 
     - name: 添加 HAMi Helm 仓库（在线模式）
       shell: |
-        {{ base_dir }}/bin/helm repo add hami-charts https://project-hami.github.io/HAMi/
-        {{ base_dir }}/bin/helm repo update
+        {{ bin_dir }}/helm repo add hami-charts https://project-hami.github.io/HAMi/ 2>&1 || true
+        {{ bin_dir }}/helm repo update
       when:
         - "not hami_chart_local.stat.exists"
         - "hami_install_source == 'online'"
@@ -29,7 +41,7 @@
 
     - name: 通过 Helm 安装 HAMi（在线 chart）
       shell: |
-        {{ base_dir }}/bin/helm upgrade hami hami-charts/hami \
+        {{ bin_dir }}/helm upgrade hami hami-charts/hami \
           --install \
           --create-namespace \
           -n {{ hami_namespace }} \
@@ -42,7 +54,7 @@
 
     - name: 通过 Helm 安装 HAMi（离线本地 chart）
       shell: |
-        {{ base_dir }}/bin/helm upgrade hami \
+        {{ bin_dir }}/helm upgrade hami \
           {{ base_dir }}/roles/cluster-addon/files/hami-{{ hami_ver }}.tgz \
           --install \
           --create-namespace \
@@ -51,20 +63,26 @@
           --wait --timeout 300s
       when: "hami_chart_local.stat.exists"
 
+    # HAMi v2.x 的 scheduler deployment 名称为 hami-scheduler
+    # HAMi v2.5+ 可能更名为 hami-vgpu-scheduler，使用 || true 两者都兼容
     - name: 等待 HAMi scheduler 就绪
       shell: >
-        {{ base_dir }}/bin/kubectl -n {{ hami_namespace }} rollout status
-        deployment/hami-scheduler --timeout=180s
+        {{ bin_dir }}/kubectl -n {{ hami_namespace }} rollout status
+        deployment/hami-scheduler --timeout=180s 2>/dev/null ||
+        {{ bin_dir }}/kubectl -n {{ hami_namespace }} rollout status
+        deployment/hami-vgpu-scheduler --timeout=180s 2>/dev/null || true
       ignore_errors: true
 
     - name: 等待 HAMi device-plugin DaemonSet 就绪
       shell: >
-        {{ base_dir }}/bin/kubectl -n {{ hami_namespace }} rollout status
-        daemonset/hami-device-plugin --timeout=180s
+        {{ bin_dir }}/kubectl -n {{ hami_namespace }} rollout status
+        daemonset/hami-device-plugin --timeout=180s 2>/dev/null ||
+        {{ bin_dir }}/kubectl -n {{ hami_namespace }} rollout status
+        daemonset/hami-vgpu-device-plugin --timeout=180s 2>/dev/null || true
       ignore_errors: true
 
     - name: 验证 HAMi 部署状态
-      shell: "{{ base_dir }}/bin/kubectl -n {{ hami_namespace }} get pods"
+      shell: "{{ bin_dir }}/kubectl -n {{ hami_namespace }} get pods -o wide"
       register: hami_pods
       ignore_errors: true
 
@@ -72,4 +90,4 @@
       debug:
         msg: "{{ hami_pods.stdout_lines }}"
 
-  when: 'hami_install == "yes" and "hami-scheduler" not in pod_info.stdout'
+  when: 'hami_install == "yes" and "hami-scheduler" not in pod_info.stdout and "hami-vgpu-scheduler" not in pod_info.stdout'

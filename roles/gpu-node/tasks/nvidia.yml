@@ -53,9 +53,21 @@
 
 # ---- 4. 安装 NVIDIA 驱动 ----
 - name: 检查 NVIDIA 驱动是否已安装（nvidia-smi）
-  shell: "which nvidia-smi && nvidia-smi -L || true"
+  shell: "which nvidia-smi && nvidia-smi -L"
   register: nvsmi_check
   changed_when: false
+  ignore_errors: true
+
+- name: 验证驱动安装源配置（url 和本地包至少配一个）
+  fail:
+    msg: >
+      NVIDIA 驱动未安装，且未配置 nvidia_driver_url 或 nvidia_driver_local_pkg。
+      请在 config.yml 中设置其中一项，或将 GPU 节点已有驱动并重新运行。
+  when:
+    - "nvsmi_check.rc != 0 or nvsmi_check.stdout == ''"
+    - "nvidia_driver_url == ''"
+    - "nvidia_driver_local_pkg == ''"
+    - "not GPU_FORCE_INSTALL|bool"
 
 - name: 下载 NVIDIA 驱动安装包
   get_url:
@@ -64,7 +76,7 @@
     timeout: 600
     validate_certs: false
   when:
-    - "nvsmi_check.stdout == ''"
+    - "nvsmi_check.rc != 0 or nvsmi_check.stdout == ''"
     - "nvidia_driver_url != ''"
 
 - name: 拷贝本地 NVIDIA 驱动安装包
@@ -73,7 +85,7 @@
     dest: "/tmp/nvidia-driver-{{ nvidia_driver_version }}.run"
     mode: "0755"
   when:
-    - "nvsmi_check.stdout == ''"
+    - "nvsmi_check.rc != 0 or nvsmi_check.stdout == ''"
     - "nvidia_driver_url == ''"
     - "nvidia_driver_local_pkg != ''"
 
@@ -82,9 +94,22 @@
     chmod +x /tmp/nvidia-driver-{{ nvidia_driver_version }}.run
     sh /tmp/nvidia-driver-{{ nvidia_driver_version }}.run -a -s -q \
       --dkms || sh /tmp/nvidia-driver-{{ nvidia_driver_version }}.run -a -s -q
-  when: "nvsmi_check.stdout == ''"
+  when:
+    - "nvsmi_check.rc != 0 or nvsmi_check.stdout == ''"
+    - "nvidia_driver_url != '' or nvidia_driver_local_pkg != ''"
   register: nvidia_driver_install
   ignore_errors: true
+
+- name: 验证 NVIDIA 驱动安装结果
+  shell: "nvidia-smi -L"
+  register: nvsmi_post_install
+  changed_when: false
+  ignore_errors: true
+  when: "nvsmi_check.rc != 0 or nvsmi_check.stdout == ''"
+
+- name: 打印驱动安装结果
+  debug:
+    msg: "NVIDIA 驱动安装完成: {{ nvsmi_post_install.stdout_lines | default(['(跳过检测，驱动已预装)']) }}"
 
 - name: 配置 NVIDIA 驱动持久化参数
   shell: |
@@ -95,7 +120,7 @@
     nvidia-modprobe -u -c=0 -m || true
   ignore_errors: true
 
-- name: 将 NVIDIA 驱动持久化配置写入 rc.local
+- name: 将 NVIDIA 驱动持久化配置写入 rc.local（RedHat 系）
   blockinfile:
     path: /etc/rc.d/rc.local
     create: true
@@ -109,7 +134,26 @@
       nvidia-modprobe -u -c=0 -m || true
   when: "ansible_os_family == 'RedHat'"
 
+- name: 将 NVIDIA 驱动持久化配置写入 rc.local（Debian 系）
+  blockinfile:
+    path: /etc/rc.local
+    create: true
+    mode: "0755"
+    marker: "# {mark} ANSIBLE MANAGED - NVIDIA GPU CONFIGURATION"
+    block: |
+      nvidia-smi -pm 1 || true
+      nvidia-smi -acp 0 || true
+      nvidia-smi --auto-boost-default=0 || true
+      nvidia-smi --auto-boost-permission=0 || true
+      nvidia-modprobe -u -c=0 -m || true
+  when: "ansible_os_family == 'Debian'"
+
 # ---- 5. 安装 nvidia-persistenced 服务 ----
+- name: 检查 nvidia-persistenced 二进制是否存在
+  shell: "which nvidia-persistenced || true"
+  register: persistenced_bin_check
+  changed_when: false
+
 - name: 创建 nvidia-persistenced systemd 服务单元
   copy:
     dest: /etc/systemd/system/nvidia-persistenced.service
@@ -130,7 +174,7 @@
     owner: root
     group: root
     mode: "0644"
-  when: "nvsmi_check.stdout == '' and nvidia_driver_install is not failed"
+  when: "persistenced_bin_check.stdout != ''"
   register: persistenced_unit
 
 - name: 启用并启动 nvidia-persistenced 服务
@@ -139,7 +183,7 @@
     enabled: true
     state: started
     daemon_reload: true
-  when: "persistenced_unit.changed"
+  when: "persistenced_unit is changed"
   ignore_errors: true
 
 # ---- 6. 安装 NVIDIA Container Toolkit ----
@@ -180,6 +224,15 @@
     - "nvcr_check.stdout == ''"
     - "nvidia_toolkit_install_source == 'online'"
   ignore_errors: true
+
+- name: 创建离线安装临时目录
+  file:
+    path: /tmp/nvidia-container-toolkit
+    state: directory
+    mode: "0755"
+  when:
+    - "nvcr_check.stdout == ''"
+    - "nvidia_toolkit_install_source == 'offline'"
 
 - name: 拷贝本地 nvidia-container-toolkit 安装包（离线模式）
   copy:
@@ -232,11 +285,13 @@
   ignore_errors: true
 
 # ---- 9. 为节点打 GPU 标签 ----
+# 注意：标签 nvidia.com/gpu=true 与 npu-device-plugin.yaml.j2 中的 nodeSelector 保持一致
 - name: 为 GPU 节点打 Kubernetes 标签
   shell: |
-    {{ base_dir }}/bin/kubectl label node {{ K8S_NODENAME }} \
+    {{ bin_dir }}/kubectl label node {{ K8S_NODENAME }} \
       nvidia.com/gpu=true \
       accelerator=nvidia-gpu \
+      {{ nvidia_gpu_node_label_key }}={{ nvidia_gpu_node_label_value }} \
       --overwrite
   delegate_to: "{{ groups['kube_master'][0] }}"
   ignore_errors: true

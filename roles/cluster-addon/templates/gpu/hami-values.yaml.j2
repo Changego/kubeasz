@@ -2,18 +2,28 @@
 # 文档: https://github.com/Project-HAMi/HAMi/blob/master/charts/hami/values.yaml
 # 仅列出关键可调参数，其余使用 HAMi chart 默认值
 
-# ---- 全局镜像仓库 ----
+# ---- 全局镜像仓库与调度 ----
 global:
   # 若使用私有仓库，设置此前缀（末尾不加 /）
   # 例: "registry.example.com/hami"
+{% if hami_image_registry != '' %}
   imageRegistry: "{{ hami_image_registry }}"
+{% else %}
+  imageRegistry: ""
+{% endif %}
   imagePullSecrets: []
+
+  # 是否开启设备插件等组件的节点选择器限制
+  # 设为 true 后，device-plugin 只在带有 managedNodeSelector 标签的节点上运行
+  managedNodeSelectorEnable: {{ hami_managed_node_selector_enable | default(true) | bool | lower }}
+  managedNodeSelector:
+    {{ nvidia_gpu_node_label_key }}: {{ nvidia_gpu_node_label_value }}
 
 # ---- scheduler 配置 ----
 scheduler:
   image:
     repository: "{{ hami_scheduler_image }}"
-    tag: "{{ hami_ver }}"
+    tag: "{{ hami_image_tag | default(hami_ver) }}"
   # HAMi scheduler 以 extender 方式注入 kube-scheduler
   # 此处配置调度策略
   schedulerPolicy:
@@ -42,7 +52,10 @@ scheduler:
 devicePlugin:
   image:
     repository: "{{ hami_device_plugin_image }}"
-    tag: "{{ hami_ver }}"
+    tag: "{{ hami_image_tag | default(hami_ver) }}"
+
+  # vGPU 设备切片数量（1 个物理 GPU 拆分为多少个 vGPU）
+  deviceSplitCount: {{ hami_device_split_count | default(10) }}
 
   # 资源名称：默认 nvidia.com/gpu（兼容原生 nvidia-device-plugin 的工作负载）
   resourceName: "nvidia.com/gpu"
@@ -76,7 +89,7 @@ webhook:
   enabled: true
   image:
     repository: "{{ hami_webhook_image }}"
-    tag: "{{ hami_ver }}"
+    tag: "{{ hami_image_tag | default(hami_ver) }}"
 
   resources:
     limits:
@@ -89,4 +102,11 @@ webhook:
 # ---- 监控 ----
 # 如集群已部署 Prometheus，建议启用
 monitor:
-  enabled: "{{ hami_monitor_enabled | bool }}"
+  enabled: {{ hami_monitor_enabled | bool | lower }}
+
+# ---- 底层设备驱动管理 ----
+device:
+  nvidia:
+    driver:
+      # 当节点已有驱动时（如使用 gpu-node 角色），应设为 false，防止 HAMi 覆盖安装
+      enabled: {{ hami_nvidia_driver_enabled | default(false) | bool | lower }}

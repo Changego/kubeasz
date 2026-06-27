@@ -1,5 +1,7 @@
 # NPU Device Plugin DaemonSet（华为昇腾）
-# 参考阿里云 npu-device-plugin.yml，适配 kubeasz 的 Jinja2 模板变量
+# 适配 kubeasz 的 Jinja2 模板变量
+# 注意: 此 DaemonSet 运行需要节点有 huawei.com/npu=true 标签
+#       该标签由 roles/gpu-node/tasks/npu.yml 自动打标，与 nodeSelector 保持一致
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -25,7 +27,10 @@ spec:
           effect: NoSchedule
         - key: node-role.kubernetes.io/master
           effect: NoSchedule
+        - key: node-role.kubernetes.io/control-plane
+          effect: NoSchedule
       priorityClassName: system-node-critical
+      # 仅调度到有 NPU 的节点（与 npu.yml 中打的标签保持一致）
       nodeSelector:
         huawei.com/npu: "true"
       containers:
@@ -46,7 +51,8 @@ spec:
             - name: dev
               mountPath: /dev
             - name: npusmi
-              mountPath: /usr/bin/npusmi
+              mountPath: /usr/local/bin/npu-smi
+              readOnly: true
       volumes:
         - name: device-plugin
           hostPath:
@@ -56,4 +62,5 @@ spec:
             path: /dev
         - name: npusmi
           hostPath:
-            path: /usr/bin/npusmi
+            path: /usr/local/bin/npu-smi
+            type: FileOrCreate

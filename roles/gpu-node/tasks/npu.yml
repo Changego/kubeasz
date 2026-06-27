@@ -5,9 +5,10 @@
 
 # ---- 1. 检查 NPU 驱动是否已安装 ----
 - name: 检查昇腾 NPU 驱动是否已安装（npu-smi）
-  shell: "which npu-smi && npu-smi info || true"
+  shell: "which npu-smi && npu-smi info"
   register: npusmi_check
   changed_when: false
+  ignore_errors: true
 
 - name: 打印 NPU 驱动状态
   debug:
@@ -22,7 +23,7 @@
     dest: "/tmp/{{ npu_driver_local_pkg | basename }}"
     mode: "0755"
   when:
-    - "npusmi_check.stdout == ''"
+    - "npusmi_check.rc != 0 or npusmi_check.stdout == ''"
     - "npu_driver_local_pkg != ''"
 
 - name: 安装昇腾 NPU 驱动
@@ -30,9 +31,20 @@
     chmod +x /tmp/{{ npu_driver_local_pkg | basename }}
     /tmp/{{ npu_driver_local_pkg | basename }} --full
   when:
-    - "npusmi_check.stdout == ''"
+    - "npusmi_check.rc != 0 or npusmi_check.stdout == ''"
     - "npu_driver_local_pkg != ''"
+  register: npu_driver_install
   ignore_errors: true
+
+- name: 打印 NPU 驱动安装提示（无本地包时）
+  debug:
+    msg: >
+      未设置 npu_driver_local_pkg，跳过 NPU 驱动安装。
+      请从华为官方下载驱动包并配置 npu_driver_local_pkg 变量。
+      参考: https://www.hiascend.com/document
+  when:
+    - "npusmi_check.rc != 0 or npusmi_check.stdout == ''"
+    - "npu_driver_local_pkg == ''"
 
 # ---- 3. 安装昇腾 NPU Firmware ----
 - name: 拷贝昇腾 NPU Firmware 安装包
@@ -42,7 +54,7 @@
     mode: "0755"
   when:
     - "npu_firmware_local_pkg != ''"
-    - "npusmi_check.stdout == ''"
+    - "npusmi_check.rc != 0 or npusmi_check.stdout == ''"
 
 - name: 安装昇腾 NPU Firmware
   shell: |
@@ -50,12 +62,12 @@
     /tmp/{{ npu_firmware_local_pkg | basename }} --full
   when:
     - "npu_firmware_local_pkg != ''"
-    - "npusmi_check.stdout == ''"
+    - "npusmi_check.rc != 0 or npusmi_check.stdout == ''"
   ignore_errors: true
 
 # ---- 4. 安装 MindX DL（用于 NPU 容器化支持）----
 # MindX DL 提供类似 nvidia-container-toolkit 的 NPU 容器运行时支持
-- name: 检查 mindxdl-device-plugin 是否已安装
+- name: 检查 ascend-docker-runtime 是否已在运行
   shell: "systemctl is-active ascend-docker-runtime || true"
   register: mindxdl_check
   changed_when: false
@@ -101,11 +113,15 @@
   when: "ascend_runtime_check.stdout == 'not_found'"
 
 # ---- 6. 为 NPU 节点打标签 ----
+# 注意: 使用 npu_label_node / npu_node_label_key / npu_node_label_value
+#       这些变量定义在 defaults/main.yml，与 NVIDIA 变量独立，避免冲突
 - name: 为昇腾 NPU 节点打 Kubernetes 标签
   shell: |
-    {{ base_dir }}/bin/kubectl label node {{ K8S_NODENAME }} \
+    {{ bin_dir }}/kubectl label node {{ K8S_NODENAME }} \
       huawei.com/npu=true \
       accelerator=huawei-npu \
+      {{ npu_node_label_key }}={{ npu_node_label_value }} \
       --overwrite
   delegate_to: "{{ groups['kube_master'][0] }}"
   ignore_errors: true
+  when: "npu_label_node|bool"

@@ -305,6 +305,14 @@ npu_device_plugin_install: "no"
 # npu-device-plugin 镜像（需提前推送到私有仓库或可访问公网）
 npu_device_plugin_image: "swr.cn-south-1.myhuaweicloud.com/ascend-deviceplugin/ascend-k8sdeviceplugin:v5.0.RC3"
 
+# 是否自动为 NPU 节点打 Kubernetes 标签
+npu_label_node: true
+
+# NPU 节点标签键值对（用于 NPU device plugin 节点选择）
+# 与 roles/gpu-node/tasks/npu.yml 中打标签保持一致
+npu_node_label_key: "npu"
+npu_node_label_value: '"on"'
+
 
 ############################
 # HAMi vGPU（GPU 虚拟化共享）
@@ -316,8 +324,12 @@ npu_device_plugin_image: "swr.cn-south-1.myhuaweicloud.com/ascend-deviceplugin/a
 # 是否启用 HAMi vGPU（yes|no）
 hami_install: "no"
 
-# HAMi 版本（Helm chart 版本，与镜像 tag 对齐）
-hami_ver: "v2.4.1"
+# HAMi 版本（Helm chart 版本）
+# 与 ezdown 中 hamiVer 版本保持一致
+hami_ver: "v2.7.1"
+
+# HAMi 镜像 Tag（默认与 hami_ver 保持一致，若镜像版本特殊可单独设置）
+hami_image_tag: "v2.7.1"
 
 # HAMi 组件部署命名空间
 hami_namespace: "kube-system"
@@ -345,6 +357,18 @@ hami_gpu_scheduler_policy: "spread"
 # ---- MIG 支持（适用 A100/H100 等支持 MIG 的卡）----
 # 可选值: none | single | mixed
 hami_mig_strategy: "none"
+
+# ---- vGPU 设备切片数量 ----
+# 1 个物理 GPU 拆分为多少个 vGPU 份额
+hami_device_split_count: 10
+
+# ---- 驱动与设备管理（防止冲突）----
+# 是否由 HAMi 自动安装 NVIDIA 驱动（若节点已通过 gpu-node 角色安装，应设为 false）
+hami_nvidia_driver_enabled: false
+
+# ---- 节点选择器限制 ----
+# 是否限制设备插件只在带有特定标签的节点（如 gpu="on"）上运行，防止在 CPU 节点报错
+hami_managed_node_selector_enable: true
 
 # ---- 监控（需集群已部署 Prometheus）----
 hami_monitor_enabled: false

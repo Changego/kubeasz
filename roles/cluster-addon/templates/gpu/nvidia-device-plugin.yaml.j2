@@ -27,8 +27,11 @@ spec:
           effect: NoSchedule
         - key: node-role.kubernetes.io/master
           effect: NoSchedule
+        - key: node-role.kubernetes.io/control-plane
+          effect: NoSchedule
       priorityClassName: system-node-critical
       # 仅调度到有 NVIDIA GPU 的节点
+      # 与 nvidia.yml 中 `kubectl label node ... nvidia.com/gpu=true` 保持一致
       nodeSelector:
         nvidia.com/gpu: "true"
       containers:
@@ -38,15 +41,11 @@ spec:
             - "--fail-on-init-error=false"
             - "--pass-device-specs=true"
             - "--device-id-strategy=index"
+{% if nvidia_dp_disable_healthchecks != '' %}
           env:
             - name: DP_DISABLE_HEALTHCHECKS
               value: "{{ nvidia_dp_disable_healthchecks }}"
-            - name: NVIDIA_VISIBLE_DEVICES
-              value: all
-            - name: NODE_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: spec.nodeName
+{% endif %}
           resources:
             limits:
               memory: "300Mi"
@@ -61,13 +60,7 @@ spec:
           volumeMounts:
             - name: device-plugin
               mountPath: /var/lib/kubelet/device-plugins
-            - name: device-plugin-config
-              mountPath: /etc/nvidia-device-plugin
       volumes:
         - name: device-plugin
           hostPath:
             path: /var/lib/kubelet/device-plugins
-        - name: device-plugin-config
-          hostPath:
-            path: /etc/nvidia-device-plugin
-            type: DirectoryOrCreate

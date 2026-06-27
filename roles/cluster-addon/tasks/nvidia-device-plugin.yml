@@ -1,6 +1,7 @@
 ---
 # 部署 NVIDIA Device Plugin（DaemonSet 方式）
 # 使 kubelet 能识别 nvidia.com/gpu 资源，让 Pod 申请 GPU
+# 注意: 启用 HAMi vGPU 时请勿同时启用此插件（二者互斥）
 
 - block:
     - name: 准备 nvidia-device-plugin 部署目录
@@ -12,12 +13,21 @@
         dest: "{{ cluster_dir }}/yml/gpu/nvidia-device-plugin.yaml"
 
     - name: 部署 nvidia-device-plugin
-      shell: "{{ base_dir }}/bin/kubectl apply -f {{ cluster_dir }}/yml/gpu/nvidia-device-plugin.yaml"
+      shell: "{{ bin_dir }}/kubectl apply -f {{ cluster_dir }}/yml/gpu/nvidia-device-plugin.yaml"
 
     - name: 等待 nvidia-device-plugin DaemonSet 就绪
       shell: >
-        {{ base_dir }}/bin/kubectl -n kube-system rollout status
+        {{ bin_dir }}/kubectl -n kube-system rollout status
         daemonset/nvidia-device-plugin-daemonset --timeout=120s
       ignore_errors: true
+
+    - name: 查看 nvidia-device-plugin Pod 状态
+      shell: "{{ bin_dir }}/kubectl -n kube-system get pods -l app=nvidia-device-plugin -o wide"
+      register: nvdp_pods
+      ignore_errors: true
+
+    - name: 打印 nvidia-device-plugin Pod 状态
+      debug:
+        msg: "{{ nvdp_pods.stdout_lines }}"
 
   when: 'nvidia_device_plugin_install == "yes"'
